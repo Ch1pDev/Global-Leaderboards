@@ -1,0 +1,265 @@
+--// SERVICES
+local Players = game:GetService("Players")
+local DebrisService = game:GetService("Debris")
+local UserService = game:GetService("UserService")
+local ReplicatedStorage = game:GetService("ReplicatedStorage")
+local DataStoreService = game:GetService("DataStoreService")
+
+--// DATASTORE TABLE
+local DataStores = {
+	Dollars = DataStoreService:GetOrderedDataStore("Dollars")
+}
+
+--// MODULES
+local FormatNumber = require(ReplicatedStorage.Libs.FormatNumber.Simple)
+
+--// TYPES
+export type LeaderboardType = "Dollars"
+
+type stateInfo = {
+	UserId: number,
+	Amount: number
+}
+
+type Earnings = {
+	[number] : {
+		Dollars: number
+	}
+}
+
+local LeaderboardStates : { [LeaderboardType] : { [number] : {stateInfo} } } = {
+	Dollars = {}
+}
+
+--// VARIABLES
+local Map = workspace.Map
+local globalLeaderboards = Map["Global Leaderboards"]
+local Model = globalLeaderboards.Model
+
+local Gold_Statue = Model.Gold.Statue
+local Bronze_Statue = Model.Bronze.Statue
+local Silver_Statue = Model.Silver.Statue
+
+local Leaderboard = Model.Leaderboard
+local Container = Leaderboard.SurfaceGui.Container
+local RefreshTextLabel = Leaderboard.SurfaceGui.Refresh
+local Template = script.Template
+
+--// CONSTANTS
+local LastStateUpdateTime
+local GET_STATE_TIME_IN_SECONDS = 10
+local SAVE_EARNINGS_TIME_IN_SECONDS = 19
+
+--// MAIN
+local Earnings: Earnings = {}
+local Leaderboards = {}
+Leaderboards.Earnings = Earnings
+
+--// MAIN LOCAL FUNCTIONS
+local function FormatTime(Seconds: number)
+	local number = math.round(Seconds)
+
+	local Minutes = math.round((number / 60) % 60)
+	local Seconds = math.round(number % 60)
+
+	return Minutes .. "m" .. "" .. Seconds .. "s"
+end
+
+local function ClearPrevGui(Head: BasePart?)
+	for _, BillboardGui in Head:GetChildren() do
+		if not BillboardGui:IsA("BillboardGui") then continue end
+		DebrisService:AddItem(BillboardGui, 0)
+	end
+end
+
+local function resetStatue(userId: number, place: number, name: string)
+	local success, description = pcall(function()
+		return Players:GetHumanoidDescriptionFromUserId(userId)
+	end)
+	
+	if not success or not description then warn("No description found for: ", name) return end
+	
+	local Player_Name_ScreenGui = script.Player_Name:Clone()
+	local Top_Screen_Gui = script.Top:Clone()
+
+	if place == 1 then
+		ClearPrevGui(Gold_Statue.Head)
+		Gold_Statue.Humanoid:ApplyDescription(description)
+		
+		Player_Name_ScreenGui.Container.Title.Text = name
+		Player_Name_ScreenGui.Parent = Gold_Statue.Head
+		Top_Screen_Gui.Parent = Gold_Statue.Head
+		
+	elseif place == 2 then
+		ClearPrevGui(Silver_Statue.Head)
+		Silver_Statue.Humanoid:ApplyDescription(description)
+		
+		Player_Name_ScreenGui.Container.Title.Text = name
+		Player_Name_ScreenGui.Parent = Silver_Statue.Head
+		Top_Screen_Gui.Parent = Silver_Statue.Head
+		
+	elseif place == 3 then
+		ClearPrevGui(Bronze_Statue.Head)
+		Bronze_Statue.Humanoid:ApplyDescription(description)
+		
+		Player_Name_ScreenGui.Container.Title.Text = name
+		Player_Name_ScreenGui.Parent = Bronze_Statue.Head
+		Top_Screen_Gui.Parent = Bronze_Statue.Head
+	end
+end
+
+local function UpdateRefreshDisplay()
+	local timeUntilRefresh = GET_STATE_TIME_IN_SECONDS - (os.time() - LastStateUpdateTime)
+	RefreshTextLabel.Text = `Refreshing in {FormatTime(timeUntilRefresh)}`
+end
+
+local function CleanContainer()
+	for _, frame in Container:GetChildren() do
+		if frame:IsA("Frame") then
+			frame:Destroy()
+		end
+	end
+end
+
+local function AddPlayerToLeaderboard(userid: number, amount: number, place: number)
+	local success, playerInfo = pcall(function()
+		return UserService:GetUserInfosByUserIdsAsync({tonumber(userid)})
+	end)
+	
+	local name = if playerInfo[1] then playerInfo[1].DisplayName else userid
+	
+	local template = script.Template:Clone()
+	template.Name = userid
+	template.Place.Text = place
+	template.Username.Text = name
+	template.DollarsText.Text = FormatNumber.FormatCompact(amount)
+	template.LayoutOrder = place
+	template.Visible = true
+	template.Parent = Container
+	
+	if place == 1 or place == 2 or place == 3 then
+		resetStatue(userid, place, name)
+	end
+end
+
+local function FetchLeaderboardState()
+	LeaderboardStates = {
+		Dollars = {}
+	}
+	
+	CleanContainer()
+	
+	-- Some cool text tween
+	local Corou = coroutine.create(function()
+		local Counter = 0
+		while true do
+			Counter += 1
+			if Counter == 1 then
+				RefreshTextLabel.Text = "Refreshing."
+			elseif Counter == 2 then
+				RefreshTextLabel.Text = "Refreshing.."
+			elseif Counter == 3 then
+				RefreshTextLabel.Text = "Refreshing..."
+				Counter = 0
+			end
+			
+			task.wait(0.5)
+		end
+	end)
+	coroutine.resume(Corou)
+	
+	for leaderboardType, dataStore in DataStores do
+		local pages = dataStore:GetSortedAsync(false, 100)
+		local items = pages:GetCurrentPage()
+		
+		for index, item in items do
+			local userid = item.key
+			local amount = item.value
+			table.insert(LeaderboardStates[leaderboardType], {
+				UserId = userid,
+				Amount = amount,
+			})
+			
+			AddPlayerToLeaderboard(userid, amount, index)
+		end
+	end
+	
+	coroutine.close(Corou)
+	LastStateUpdateTime = os.time()
+end
+
+local function SaveData(Player: Player, dataStoreType: LeaderboardType)
+	local earnings = Leaderboards.Earnings[Player.UserId]
+	if not earnings then return end
+	
+	for currency, amount in earnings do
+		DataStores[dataStoreType]:IncrementAsync(tostring(Player.UserId), amount)
+		
+		if Leaderboards.Earnings[Player.UserId] then
+			Leaderboards.Earnings[Player.UserId][currency] = 0
+		end
+	end
+end
+
+local function createSaveLoop(Player: Player)
+	while Player and Player:IsDescendantOf(Players) do
+		SaveData(Player, "Dollars")
+		task.wait(SAVE_EARNINGS_TIME_IN_SECONDS)
+	end
+end
+
+--// MAIN GLOBAL FUNCTION
+function Leaderboards.AdjustLeaderboard(Player: Player, Type: LeaderboardType, amount: number)
+	if amount > 0 then 
+		if Leaderboards.Earnings[Player.UserId] then
+			Leaderboards.Earnings[Player.UserId][Type] += amount
+			return
+		end
+	end
+end
+
+--// Initiation
+task.spawn(function()
+	FetchLeaderboardState()
+
+	while true do
+		pcall(function()
+			local shouldRefresh = os.time() - LastStateUpdateTime >= GET_STATE_TIME_IN_SECONDS
+			if shouldRefresh then
+				FetchLeaderboardState()
+			end
+			UpdateRefreshDisplay()
+		end)
+		task.wait(1)
+	end
+end)
+
+-- Create saving loop in case a player joins before the server loads fully
+for _, player in Players:GetPlayers() do
+	task.spawn(function()
+		createSaveLoop(player)
+	end)
+end
+
+--// Events
+Players.PlayerAdded:Connect(function(Player: Player)
+	Leaderboards.Earnings[Player.UserId] = {}
+	Leaderboards.Earnings[Player.UserId]["Dollars"] = 0
+	
+	task.spawn(function()
+		createSaveLoop(Player)
+	end)
+end)
+
+Players.PlayerRemoving:Connect(function(Player: Player)
+	SaveData(Player, "Dollars")
+	Leaderboards.Earnings[Player.UserId] = nil
+end)
+
+game:BindToClose(function()
+	for _, player in Players:GetPlayers() do
+		SaveData(player, "Dollars")
+	end
+end)
+
+return Leaderboards
