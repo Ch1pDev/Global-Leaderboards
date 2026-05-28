@@ -1,3 +1,6 @@
+-- Discord Username: ch1pdev
+-- Roblox Username: farkuthunder
+
 --// SERVICES
 local Players = game:GetService("Players")
 local DebrisService = game:GetService("Debris")
